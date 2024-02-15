@@ -4,7 +4,6 @@ extern crate lazy_static;
 use axum::Router;
 use clap::{command, Parser};
 use tower_http::services::ServeDir;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 pub mod static_sites;
 
@@ -55,14 +54,7 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() {
-    //tracing_subscriber::fmt::init();
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "example_websockets=debug,tower_http=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    tracing_subscriber::fmt::init();
 
     let args = Args::parse();
     let generator = run_generator(&args);
@@ -70,16 +62,10 @@ async fn main() {
     let mut app = static_sites::initialize(Router::new())
         .nest_service("/static", ServeDir::new("./output/static"));
 
-    //#[cfg(debug_assertions)]
-    //{
-    app = app
-        .route("/ws/hotreload", axum::routing::get(hot_reload_handler))
-        .layer(
-            tower_http::trace::TraceLayer::new_for_http().make_span_with(
-                tower_http::trace::DefaultMakeSpan::default().include_headers(true),
-            ),
-        );
-    //}
+    #[cfg(debug_assertions)]
+    {
+        app = app.route("/ws/hotreload", axum::routing::get(hot_reload_handler))
+    }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app.into_make_service())
