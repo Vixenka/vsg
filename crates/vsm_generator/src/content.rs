@@ -15,7 +15,6 @@ use crate::Context;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContentCache {}
 
-#[tracing::instrument]
 pub async fn process_content(context: &Arc<Context>) {
     let tasks: Vec<_> =
         collect_files_for_processing(&Path::new(&context.args.project).join("content"))
@@ -55,7 +54,6 @@ fn collect_files_for_processing(path: &Path) -> Vec<PathBuf> {
     files
 }
 
-#[tracing::instrument]
 async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()> {
     tracing::trace!("Processing file '{}'.", path.display());
 

@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod content;
+pub mod static_files;
 pub mod template;
 pub mod template_repository;
 
@@ -20,7 +21,7 @@ struct Args {
 }
 
 #[derive(Debug)]
-struct Context {
+pub struct Context {
     templates: TemplateRepository,
     args: Args,
 }
@@ -56,5 +57,10 @@ async fn main() {
     };
 
     let context = Arc::new(Context { templates, args });
-    content::process_content(&context).await;
+    tokio::join!(
+        content::process_content(&context),
+        static_files::process_static(&context)
+    );
+
+    tracing::info!("Generated website.")
 }

@@ -8,7 +8,6 @@ pub struct TemplateRepository {
 }
 
 impl TemplateRepository {
-    #[tracing::instrument]
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let mut templates = HashMap::new();
         for file in WalkDir::new(path.join("templates"))
