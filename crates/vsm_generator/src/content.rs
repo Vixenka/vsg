@@ -1,16 +1,25 @@
 use std::{
-    fs::{self, File},
-    io::{Cursor, Write},
+    io::Cursor,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use quick_xml::{events::Event, Reader};
+use quick_xml::{
+    events::{BytesEnd, Event},
+    name::QName,
+    Reader,
+};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 use walkdir::WalkDir;
 
-use crate::Context;
+use crate::{content::content_variables::ContentVariables, Context};
+
+pub mod content_variables;
+pub mod markdown;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContentCache {}
@@ -34,13 +43,46 @@ pub async fn process_content(context: &Arc<Context>) {
     }
 }
 
+pub fn get_id_from_name(name: &str) -> String {
+    let mut name = name;
+    if name
+        .as_bytes()
+        .first()
+        .map_or(false, |v| v.is_ascii_digit())
+    {
+        name = &name[1..];
+    }
+
+    if name.starts_with('.') {
+        name = &name[1..];
+    }
+
+    let mut result = String::new();
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            result.push(c.to_ascii_lowercase());
+        } else if c == ' ' || c == '-' {
+            result.push('_');
+        }
+    }
+
+    result
+}
+
 fn collect_files_for_processing(path: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
 
     for file in WalkDir::new(path).into_iter().filter_map(|file| file.ok()) {
-        if !file.file_type().is_file()
-            || file.path().extension().to_owned().unwrap().to_str() != Some("html")
-        {
+        if !file.file_type().is_file() {
+            continue;
+        }
+
+        let extension = file.path().extension().to_owned().unwrap().to_str();
+        if extension != Some("html") && extension != Some("md") {
+            continue;
+        }
+
+        if file.file_name() == "_template.html" {
             continue;
         }
 
@@ -57,7 +99,45 @@ fn collect_files_for_processing(path: &Path) -> Vec<PathBuf> {
 async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()> {
     tracing::trace!("Processing file '{}'.", path.display());
 
-    let mut file = match tokio::fs::File::open(&path).await {
+    let mut variables = ContentVariables::new();
+    let template_path = match path.extension().expect("Unable to get extension").to_str() {
+        Some("md") => {
+            let set_variable = markdown::set_variable(&path, &mut variables);
+            let template_path = markdown::get_template(&context, &path);
+
+            set_variable.await?;
+            template_path.await?
+        }
+        _ => path.clone(),
+    };
+
+    let html = create_html_file(&context, template_path, &variables).await?;
+
+    let mut output_path = Path::new(&context.args.output).join(
+        path.strip_prefix(&context.args.project)
+            .expect("Unable to strip prefix."),
+    );
+    output_path.set_extension("html");
+
+    fs::create_dir_all(output_path.parent().unwrap())
+        .await
+        .expect("Unable to create directory.");
+    fs::File::create(output_path)
+        .await
+        .expect("Unable to create file.")
+        .write_all(html.as_slice())
+        .await
+        .expect("Unable to write file.");
+
+    Ok(())
+}
+
+async fn create_html_file(
+    context: &Arc<Context>,
+    template_path: PathBuf,
+    variables: &ContentVariables,
+) -> anyhow::Result<Vec<u8>> {
+    let mut file = match tokio::fs::File::open(&template_path).await {
         Ok(file) => file,
         Err(error) => {
             tracing::error!("Unable to open file: {}.", error);
@@ -72,36 +152,51 @@ async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()
     let mut reader = Reader::from_reader(Cursor::new(buffer));
     reader.check_end_names(false);
 
+    let mut last_start_position = None;
+    let mut last_edited_position = 0;
     let mut buf: Vec<u8> = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let element_name = match std::str::from_utf8(e.name().0) {
-                    Ok(e) => e,
-                    Err(error) => {
-                        tracing::error!(
-                            "Error in processing file `{}` at position {}: {:?}",
-                            path.display(),
-                            reader.buffer_position(),
-                            error
-                        );
-                        return Err(error.into());
-                    }
-                };
+                last_start_position = Some(reader.buffer_position());
+                let element_name = get_element_name(&e.name(), &mut reader, &template_path)?;
 
                 if let Some(template) = context.templates.get(element_name) {
                     let position = reader.buffer_position();
-                    reader.get_mut().get_mut().splice(
-                        (position - e.len() - 2)..position,
-                        template.data.iter().cloned(),
-                    );
+                    let start_position = position - e.len() - 2;
+                    reader
+                        .get_mut()
+                        .get_mut()
+                        .splice(start_position..position, template.data.iter().cloned());
                 }
+            }
+            Ok(Event::Text(text)) => {
+                let text = std::str::from_utf8(&text)?;
+                for (key, value) in &variables.variables {
+                    if let Some(position) = text.find(&format!("{{{{{}}}}}", key)) {
+                        let position = reader.buffer_position() - text.len() + position;
+                        reader
+                            .get_mut()
+                            .get_mut()
+                            .splice(position..(position + key.len() + 4), value.iter().cloned());
+                    }
+                }
+            }
+            Ok(Event::End(e)) => {
+                let element_name = get_element_name(&e.name(), &mut reader, &template_path)?;
+                upgrade_header(
+                    &e,
+                    element_name,
+                    &mut reader,
+                    &mut last_start_position,
+                    &mut last_edited_position,
+                );
             }
             Ok(Event::Eof) => break,
             Err(error) => {
                 tracing::error!(
                     "Error in processing file `{}` at position {}: {:?}",
-                    path.display(),
+                    template_path.display(),
                     reader.buffer_position(),
                     error
                 );
@@ -113,11 +208,6 @@ async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()
         buf.clear();
     }
 
-    let mut output_path = Path::new(&context.args.output)
-        .join("content")
-        .join(path.file_name().unwrap());
-    output_path.set_extension("html");
-
     #[cfg(not(debug_assertions))]
     let minified = minify_html::minify(
         reader.get_ref().get_ref().as_slice(),
@@ -126,11 +216,68 @@ async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()
     #[cfg(debug_assertions)]
     let minified = reader.into_inner().into_inner();
 
-    fs::create_dir_all(output_path.parent().unwrap()).expect("Unable to create directory.");
-    File::create(output_path)
-        .expect("Unable to create file.")
-        .write_all(minified.as_slice())
-        .expect("Unable to write file.");
+    Ok(minified)
+}
 
-    Ok(())
+fn get_element_name<'a>(
+    e: &QName<'a>,
+    reader: &mut Reader<Cursor<Vec<u8>>>,
+    template_path: &Path,
+) -> anyhow::Result<&'a str> {
+    match std::str::from_utf8(e.0) {
+        Ok(e) => Ok(e),
+        Err(error) => {
+            tracing::error!(
+                "Error in processing file `{}` at position {}: {:?}",
+                template_path.display(),
+                reader.buffer_position(),
+                error
+            );
+            Err(error.into())
+        }
+    }
+}
+
+fn upgrade_header(
+    e: &BytesEnd,
+    element_name: &str,
+    reader: &mut Reader<Cursor<Vec<u8>>>,
+    last_start_position: &mut Option<usize>,
+    last_edited_position: &mut usize,
+) {
+    let mut position = reader.buffer_position();
+    if !(element_name.starts_with('h')
+        && element_name
+            .as_bytes()
+            .get(1)
+            .map_or(false, |v| v.is_ascii_digit()))
+        || last_start_position.is_none()
+        || position < *last_edited_position + 1
+    {
+        return;
+    }
+    let last_start_position = last_start_position.take().unwrap();
+
+    let start_position = last_start_position - e.len() - 2;
+    let id = get_id_from_name(
+        std::str::from_utf8(&reader.get_mut().get_mut()[last_start_position..position - 5])
+            .unwrap(),
+    );
+
+    let new = format!(
+        "<{element_name} class=\"header-text\" id=\"{id}\"><a href=\"#{id}\"><span>#</span> "
+    );
+    reader.get_mut().get_mut().splice(
+        start_position..last_start_position,
+        new.as_bytes().iter().copied(),
+    );
+
+    position += new.len() - 9;
+
+    reader
+        .get_mut()
+        .get_mut()
+        .splice(position..position, b"</a>".iter().copied());
+
+    *last_edited_position = position + 9;
 }

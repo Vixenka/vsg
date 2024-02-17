@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 #[macro_use]
 extern crate lazy_static;
 
@@ -13,6 +14,7 @@ lazy_static! {
         std::sync::Arc::new(tokio::sync::broadcast::channel(100).0);
 }
 
+#[cfg(debug_assertions)]
 static HOT_RELOAD_SCRIPT: &str = r#"
     <script>
         function hotreload() {
@@ -59,6 +61,7 @@ async fn main() {
     let args = Args::parse();
     let generator = run_generator(&args);
 
+    #[allow(unused_mut)]
     let mut app = static_sites::initialize(Router::new())
         .nest_service("/static", ServeDir::new("./output/static"));
 
