@@ -21,6 +21,8 @@ pub async fn analyze_file(
     tracing::trace!("Analyzing file '{}'", path.display());
 
     let mut variables = ContentVariables::new();
+    variables.insert("link".to_owned(), context.get_file_link(&path));
+
     let mut content = None;
     let template_path = match path.extension().expect("Unable to get extension").to_str() {
         Some("md") => {

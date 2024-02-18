@@ -178,7 +178,7 @@ async fn process_variables(
         let Some(value) = md_variables.get(key) else {
             anyhow::bail!("Unable to find markdown variable with key '{}'", key);
         };
-        let key = key.to_owned();
+        let key = format!("md_{}", key);
 
         match value {
             VariableValue::String(str) => variables.insert(key, str.to_owned()),

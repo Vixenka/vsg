@@ -1,6 +1,5 @@
 use std::{
     io::Cursor,
-    ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -30,19 +29,51 @@ pub mod word_counter;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContentCache {}
 
-pub async fn process_content(context: &Arc<Context>) -> anyhow::Result<()> {
+#[derive(Debug, Default)]
+pub struct ContentResult {
+    errors: Vec<anyhow::Error>,
+    warnings: Vec<anyhow::Error>,
+}
+
+impl ContentResult {
+    pub fn new() -> Self {
+        Self {
+            errors: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    pub fn push_error(&mut self, error: anyhow::Error) {
+        self.errors.push(error);
+    }
+
+    pub fn push_warning(&mut self, warning: anyhow::Error) {
+        self.warnings.push(warning);
+    }
+
+    pub fn errors(&self) -> &[anyhow::Error] {
+        &self.errors
+    }
+
+    pub fn warnings(&self) -> &[anyhow::Error] {
+        &self.warnings
+    }
+}
+
+pub async fn process_content(context: &Arc<Context>) -> anyhow::Result<ContentResult> {
     let mut set = JoinSet::new();
     for file in collect_files_for_processing(&Path::new(&context.args.project).join("content")) {
         let context = context.clone();
         set.spawn(async move { preliminary_analysis::analyze_file(context, file).await });
     }
 
+    let mut content_result = ContentResult::new();
     let mut preliminary_outputs = Vec::new();
     while let Some(result) = set.join_next().await {
         let result = match result {
             Ok(previous_step) => previous_step,
             Err(error) => {
-                tracing::error!("Error in processing content: {}", error);
+                content_result.push_error(error.into());
                 continue;
             }
         };
@@ -50,7 +81,7 @@ pub async fn process_content(context: &Arc<Context>) -> anyhow::Result<()> {
         match result {
             Ok(previous_step) => preliminary_outputs.push(Arc::new(previous_step)),
             Err(error) => {
-                tracing::error!("Error in processing content: {}", error);
+                content_result.push_error(error);
                 continue;
             }
         }
@@ -73,21 +104,24 @@ pub async fn process_content(context: &Arc<Context>) -> anyhow::Result<()> {
         let result = match result {
             Ok(previous_step) => previous_step,
             Err(error) => {
-                tracing::error!("Error in processing content: {}", error);
+                content_result.push_error(error.into());
                 continue;
             }
         };
 
         match result {
-            Ok(_) => {}
+            Ok(result) => {
+                content_result.errors.extend(result.errors);
+                content_result.warnings.extend(result.warnings);
+            }
             Err(error) => {
-                tracing::error!("Error in processing content: {}", error);
+                content_result.push_error(error);
                 continue;
             }
         }
     }
 
-    Ok(())
+    Ok(content_result)
 }
 
 pub fn get_id_from_name(name: &str) -> String {
@@ -146,13 +180,16 @@ fn collect_files_for_processing(path: &Path) -> Vec<PathBuf> {
 async fn process_file(
     context: Arc<Context>,
     previous_step: Arc<PreliminaryAnalysisOutput>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<ContentResult> {
     tracing::trace!("Processing file '{}'.", previous_step.path.display());
 
+    let mut result = ContentResult::new();
+    let mut variables = previous_step.variables.clone();
     let html = create_html_file(
         &context,
         &previous_step.template_path,
-        &previous_step.variables,
+        &mut variables,
+        &mut result,
     )
     .await?;
 
@@ -174,13 +211,14 @@ async fn process_file(
         .await
         .expect("Unable to write file.");
 
-    Ok(())
+    Ok(result)
 }
 
 async fn create_html_file(
     context: &Arc<Context>,
     template_path: &Path,
-    variables: &ContentVariables,
+    variables: &mut ContentVariables,
+    result: &mut ContentResult,
 ) -> anyhow::Result<String> {
     let mut file = match tokio::fs::File::open(&template_path).await {
         Ok(file) => file,
@@ -195,7 +233,7 @@ async fn create_html_file(
         .expect("Unable to read file.");
 
     let mut reader = Reader::from_reader(Cursor::new(buffer));
-    set_reader_position(&mut reader, context, variables, 0)?;
+    set_reader_position(&mut reader, context, variables, 0, result);
 
     let mut last_start_position = None;
     let mut last_edited_position = 0;
@@ -214,7 +252,7 @@ async fn create_html_file(
                         .get_mut()
                         .replace_range(start_position..position, &template.data);
 
-                    set_reader_position(&mut reader, context, variables, 0)?;
+                    set_reader_position(&mut reader, context, variables, 0, result);
                 }
             }
             Ok(Event::End(e)) => {
@@ -257,57 +295,18 @@ async fn create_html_file(
 fn set_reader_position(
     reader: &mut Reader<Cursor<String>>,
     context: &Arc<Context>,
-    variables: &ContentVariables,
+    variables: &mut ContentVariables,
     position: usize,
-) -> anyhow::Result<()> {
+    result: &mut ContentResult,
+) {
     let mut cursor = reader.get_mut().clone();
     cursor.set_position(position as u64);
 
     let len = cursor.get_mut().len();
-    let result = set_variables(cursor.get_mut(), 0..len, context, variables);
+    variables.apply(cursor.get_mut(), 0..len, context, result);
 
     *reader = Reader::from_reader(cursor);
     reader.check_end_names(false);
-    result
-}
-
-fn set_variables(
-    data: &mut String,
-    mut range: Range<usize>,
-    context: &Arc<Context>,
-    variables: &ContentVariables,
-) -> anyhow::Result<()> {
-    while let Some(start) = data[range.start..range.end].find("{{") {
-        range.start += start;
-        let end = match data[range.start..range.end].find("}}") {
-            Some(end) => range.start + end + 2,
-            None => anyhow::bail!(
-                "Unable to find end of variable. In position {}.",
-                range.start
-            ),
-        };
-
-        let key = &data[range.start + 2..end - 2];
-
-        let variable_content = match key {
-            "md_posts" => context.md_post_list.get().unwrap(),
-            _ => match variables.variables.get(key) {
-                Some(variable_content) => variable_content,
-                None => {
-                    range.start += 1;
-                    //anyhow::bail!("Unable to find variable with key '{}'", key);
-                    continue;
-                }
-            },
-        };
-
-        data.replace_range(range.start..end, variable_content);
-
-        range.end = range.end + variable_content.len() - (end - range.start);
-        range.start += variable_content.len();
-    }
-
-    Ok(())
 }
 
 fn get_element_name<'a>(

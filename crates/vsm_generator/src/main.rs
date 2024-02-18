@@ -43,7 +43,14 @@ impl Context {
             .expect("Unable to strip prefix")
             .to_owned();
         p.set_extension("");
-        p.to_str().expect("Unable to convert to str").to_owned()
+
+        let str = p.to_str().expect("Unable to convert to str");
+        match str == "index" {
+            true => "",
+            false => str,
+        }
+        .replace('\\', "/")
+        .to_owned()
     }
 }
 
@@ -87,9 +94,25 @@ async fn main() {
         static_files::process_static(&context)
     );
 
-    if let Err(err) = result.0 {
-        tracing::error!("Failed to process content: {}", err);
-        return;
+    match result.0 {
+        Ok(result) => {
+            tracing::info!(
+                "Processed content with {} errors and {} warnings.",
+                result.errors().len(),
+                result.warnings().len()
+            );
+
+            for error in result.errors() {
+                tracing::error!("{}", error);
+            }
+            for warning in result.warnings() {
+                tracing::warn!("{}", warning);
+            }
+        }
+        Err(err) => {
+            tracing::error!("Failed to process content: {}", err);
+            return;
+        }
     }
 
     tracing::info!("Generated website.")
