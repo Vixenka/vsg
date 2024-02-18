@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Default)]
 pub struct ContentVariables {
-    pub variables: HashMap<String, Vec<u8>>,
+    pub variables: HashMap<String, String>,
 }
 
 impl ContentVariables {
@@ -12,7 +12,7 @@ impl ContentVariables {
         }
     }
 
-    pub fn insert(&mut self, key: String, value: Vec<u8>) {
+    pub fn insert(&mut self, key: String, value: String) {
         self.variables.insert(key, value);
     }
 }

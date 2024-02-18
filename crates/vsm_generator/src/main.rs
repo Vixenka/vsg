@@ -4,7 +4,10 @@ pub mod static_files;
 pub mod template;
 pub mod template_repository;
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+};
 
 use clap::Parser;
 use template_repository::TemplateRepository;
@@ -20,10 +23,28 @@ struct Args {
     output: String,
 }
 
+impl Args {
+    pub fn project_content(&self) -> PathBuf {
+        Path::new(&self.project).join("content")
+    }
+}
+
 #[derive(Debug)]
 pub struct Context {
     templates: TemplateRepository,
     args: Args,
+    md_post_list: OnceLock<String>,
+}
+
+impl Context {
+    pub fn get_file_link(&self, path: &Path) -> String {
+        let mut p = path
+            .strip_prefix(&self.args.project_content())
+            .expect("Unable to strip prefix")
+            .to_owned();
+        p.set_extension("");
+        p.to_str().expect("Unable to convert to str").to_owned()
+    }
 }
 
 #[tokio::main]
@@ -56,11 +77,20 @@ async fn main() {
         }
     };
 
-    let context = Arc::new(Context { templates, args });
-    tokio::join!(
+    let context = Arc::new(Context {
+        templates,
+        args,
+        md_post_list: OnceLock::new(),
+    });
+    let result = tokio::join!(
         content::process_content(&context),
         static_files::process_static(&context)
     );
+
+    if let Err(err) = result.0 {
+        tracing::error!("Failed to process content: {}", err);
+        return;
+    }
 
     tracing::info!("Generated website.")
 }

@@ -1,9 +1,10 @@
 use std::{
     collections::HashMap,
-    fmt,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
+use anyhow::Ok;
 use chrono::{DateTime, Utc};
 use pulldown_cmark::{html, Parser};
 use tokio::fs;
@@ -11,7 +12,7 @@ use url::Url;
 
 use crate::{content, Context};
 
-use super::content_variables::ContentVariables;
+use super::{content_variables::ContentVariables, word_counter};
 
 pub async fn get_template(context: &Context, path: &Path) -> anyhow::Result<PathBuf> {
     let mut template_path = path.to_path_buf();
@@ -43,10 +44,77 @@ pub async fn get_template(context: &Context, path: &Path) -> anyhow::Result<Path
     Ok(template_path)
 }
 
-pub async fn set_variable(path: &Path, variables: &mut ContentVariables) -> anyhow::Result<()> {
+#[derive(Debug, Default)]
+pub struct MarkdownContent {
+    pub link: String,
+    pub title: String,
+    pub description: String,
+    pub date: DateTime<Utc>,
+    pub draft: bool,
+    pub technical: bool,
+    pub difficulty: f64,
+}
+
+impl MarkdownContent {
+    fn get_element<'a>(
+        key: &str,
+        md_variables: &'a HashMap<String, VariableValue>,
+    ) -> anyhow::Result<&'a VariableValue> {
+        match md_variables.get(key) {
+            Some(value) => Ok(value),
+            None => anyhow::bail!("Unable to find variable with key '{}'", key),
+        }
+    }
+
+    fn get_element_string(
+        key: &str,
+        md_variables: &HashMap<String, VariableValue>,
+    ) -> anyhow::Result<String> {
+        match Self::get_element(key, md_variables)? {
+            VariableValue::String(str) => Ok(str.clone()),
+            _ => anyhow::bail!("Variable '{}' is not a string.", key),
+        }
+    }
+
+    fn get_element_date(
+        key: &str,
+        md_variables: &HashMap<String, VariableValue>,
+    ) -> anyhow::Result<DateTime<Utc>> {
+        match Self::get_element(key, md_variables)? {
+            VariableValue::Date(date) => Ok(*date),
+            _ => anyhow::bail!("Variable '{}' is not a date.", key),
+        }
+    }
+
+    fn get_element_bool(
+        key: &str,
+        md_variables: &HashMap<String, VariableValue>,
+    ) -> anyhow::Result<bool> {
+        match Self::get_element(key, md_variables)? {
+            VariableValue::Bool(bool) => Ok(*bool),
+            _ => anyhow::bail!("Variable '{}' is not a boolean.", key),
+        }
+    }
+
+    fn get_element_number(
+        key: &str,
+        md_variables: &HashMap<String, VariableValue>,
+    ) -> anyhow::Result<f64> {
+        match Self::get_element(key, md_variables)? {
+            VariableValue::Number(number) => Ok(*number),
+            _ => anyhow::bail!("Variable '{}' is not a number.", key),
+        }
+    }
+}
+
+pub async fn set_variables(
+    context: &Arc<Context>,
+    path: &Path,
+    variables: &mut ContentVariables,
+) -> anyhow::Result<MarkdownContent> {
     let mut file_content = fs::read_to_string(path).await?;
     let md_variables = extract_variables(&mut file_content)?;
-    let process_variables = process_variables(variables, md_variables);
+    let process_variables = process_variables(context, path, variables, md_variables);
 
     let parser = Parser::new(file_content.as_str());
 
@@ -56,18 +124,21 @@ pub async fn set_variable(path: &Path, variables: &mut ContentVariables) -> anyh
     let cite_notes = generate_cite_notes(&mut html).await;
     let table_of_contents = generate_table_of_contents(&html).await;
 
-    process_variables.await;
-    variables.insert("md_content".to_owned(), html.into_bytes());
-    variables.insert("md_cite_notes".to_owned(), cite_notes.into_bytes());
+    let mut content = process_variables.await?;
+    word_counter::compute_read_time(&file_content, &mut content, variables);
+
+    variables.insert("md_content".to_owned(), html);
+    variables.insert("md_cite_notes".to_owned(), cite_notes);
     variables.insert(
         "md_table_of_contents_desktop".to_owned(),
-        table_of_contents.0.into_bytes(),
+        table_of_contents.0,
     );
     variables.insert(
         "md_table_of_contents_mobile".to_owned(),
-        table_of_contents.1.into_bytes(),
+        table_of_contents.1,
     );
-    Ok(())
+
+    Ok(content)
 }
 
 fn extract_variables(file_content: &mut String) -> anyhow::Result<HashMap<String, VariableValue>> {
@@ -88,7 +159,7 @@ fn extract_variables(file_content: &mut String) -> anyhow::Result<HashMap<String
     for line in variable_text.lines() {
         let mut parts = line.splitn(2, ':');
         if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
-            let value = VariableValue::from_str(value);
+            let value = VariableValue::from_str(value)?;
             result.insert(key.trim().to_owned(), value);
         }
     }
@@ -98,12 +169,19 @@ fn extract_variables(file_content: &mut String) -> anyhow::Result<HashMap<String
 }
 
 async fn process_variables(
+    context: &Arc<Context>,
+    path: &Path,
     variables: &mut ContentVariables,
     md_variables: HashMap<String, VariableValue>,
-) {
-    for (key, value) in md_variables {
+) -> anyhow::Result<MarkdownContent> {
+    for key in ["title", "description", "date"] {
+        let Some(value) = md_variables.get(key) else {
+            anyhow::bail!("Unable to find markdown variable with key '{}'", key);
+        };
+        let key = key.to_owned();
+
         match value {
-            VariableValue::String(str) => variables.insert(key, str.into_bytes()),
+            VariableValue::String(str) => variables.insert(key, str.to_owned()),
             VariableValue::Array(_array) => {
                 tracing::warn!("Array variables are not supported yet.");
             }
@@ -113,11 +191,22 @@ async fn process_variables(
                     r#"{}<div class="tooltip">{}</div>"#,
                     date.format("%e %B %Y"),
                     date.format("%A, %e %B %Y %H:%M:%S UTC")
-                )
-                .into_bytes(),
+                ),
             ),
+            VariableValue::Bool(bool) => variables.insert(key, bool.to_string()),
+            VariableValue::Number(number) => variables.insert(key, number.to_string()),
         };
     }
+
+    Ok(MarkdownContent {
+        link: context.get_file_link(path),
+        title: MarkdownContent::get_element_string("title", &md_variables)?,
+        description: MarkdownContent::get_element_string("description", &md_variables)?,
+        date: MarkdownContent::get_element_date("date", &md_variables)?,
+        draft: MarkdownContent::get_element_bool("draft", &md_variables)?,
+        technical: MarkdownContent::get_element_bool("technical", &md_variables)?,
+        difficulty: MarkdownContent::get_element_number("difficulty", &md_variables)?,
+    })
 }
 
 async fn generate_table_of_contents(html: &str) -> (String, String) {
@@ -309,55 +398,46 @@ fn get_description_of_cite_note(html: &str, bracket_index: usize) -> Option<&str
     }
 }
 
+#[derive(Debug)]
 enum VariableValue {
     String(String),
+    Bool(bool),
+    Number(f64),
     Array(Vec<VariableValue>),
     Date(DateTime<Utc>),
 }
 
 impl VariableValue {
-    fn from_str(value: &str) -> Self {
+    fn from_str(value: &str) -> anyhow::Result<Self> {
         let value = value.trim();
         if value.starts_with('[') {
             let mut array = Vec::new();
             for value in value[1..value.len() - 1].split(',') {
-                array.push(Self::from_str(value));
+                array.push(Self::from_str(value)?);
             }
 
             if !value.ends_with(']') {
                 tracing::warn!("Array variable is not closed with ']' character.");
             }
 
-            VariableValue::Array(array)
+            Ok(VariableValue::Array(array))
         } else if value.starts_with('"') {
             if !value.ends_with('"') {
                 tracing::warn!("String variable is not closed with '\"' character.");
             }
 
-            VariableValue::String(value[1..value.len() - 1].trim().to_owned())
+            Ok(VariableValue::String(
+                value[1..value.len() - 1].trim().to_owned(),
+            ))
+        } else if value == "true" {
+            Ok(VariableValue::Bool(true))
+        } else if value == "false" {
+            Ok(VariableValue::Bool(false))
+        } else if let std::result::Result::Ok(value) = value.parse::<f64>() {
+            Ok(VariableValue::Number(value))
         } else {
-            let date = value.parse::<DateTime<Utc>>().unwrap();
-            VariableValue::Date(date)
-        }
-    }
-}
-
-impl fmt::Display for VariableValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VariableValue::String(value) => write!(f, "{}", value),
-            VariableValue::Array(array) => {
-                write!(f, "[")?;
-                for (index, value) in array.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-
-                    write!(f, "{}", value)?;
-                }
-                write!(f, "]")
-            }
-            VariableValue::Date(date) => write!(f, "{}", date.to_rfc3339()),
+            let date = value.parse::<DateTime<Utc>>()?;
+            Ok(VariableValue::Date(date))
         }
     }
 }

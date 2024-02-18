@@ -5,7 +5,7 @@ use walkdir::DirEntry;
 #[derive(Debug)]
 pub struct Template {
     pub name: String,
-    pub data: Vec<u8>,
+    pub data: String,
 }
 
 impl Template {
@@ -16,7 +16,7 @@ impl Template {
                 .to_str()
                 .unwrap()
                 .to_owned(),
-            data: fs::read(file.path()).unwrap(),
+            data: fs::read_to_string(file.path()).unwrap(),
         })
     }
 }
