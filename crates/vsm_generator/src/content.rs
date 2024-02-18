@@ -161,6 +161,26 @@ async fn create_html_file(
                 last_start_position = Some(reader.buffer_position());
                 let element_name = get_element_name(&e.name(), &mut reader, &template_path)?;
 
+                /*for attribute in e.attributes() {
+                    let Ok(attribute) = attribute else {
+                        continue;
+                    };
+
+                    let text = std::str::from_utf8(&attribute.value)?;
+                    for (key, value) in &variables.variables {
+                        if text.contains(&format!("{{{{{}}}}}", key)) {
+                            let position = reader.buffer_position() - text.len() + attribute.value;
+                            reader.get_mut().get_mut().splice(
+                                position..(position + key.len() + 4),
+                                value.iter().cloned(),
+                            );
+
+                            set_reader_position(&mut reader, 0);
+                            break;
+                        }
+                    }
+                }*/
+
                 if let Some(template) = context.templates.get(element_name) {
                     let position = reader.buffer_position();
                     let start_position = position - e.len() - 2;
@@ -179,6 +199,9 @@ async fn create_html_file(
                             .get_mut()
                             .get_mut()
                             .splice(position..(position + key.len() + 4), value.iter().cloned());
+
+                        set_reader_position(&mut reader, 0);
+                        break;
                     }
                 }
             }
@@ -198,7 +221,7 @@ async fn create_html_file(
                     "Error in processing file `{}` at position {}: {:?}",
                     template_path.display(),
                     reader.buffer_position(),
-                    error
+                    error,
                 );
                 return Err(error.into());
             }
@@ -217,6 +240,13 @@ async fn create_html_file(
     let minified = reader.into_inner().into_inner();
 
     Ok(minified)
+}
+
+fn set_reader_position(reader: &mut Reader<Cursor<Vec<u8>>>, position: usize) {
+    let cursor = reader.get_mut();
+    cursor.set_position(position as u64);
+    *reader = Reader::from_reader(cursor.clone());
+    reader.check_end_names(false);
 }
 
 fn get_element_name<'a>(
@@ -250,7 +280,7 @@ fn upgrade_header(
         && element_name
             .as_bytes()
             .get(1)
-            .map_or(false, |v| v.is_ascii_digit()))
+            .map_or(false, |v| v.is_ascii_digit() && *v != b'1'))
         || last_start_position.is_none()
         || position < *last_edited_position + 1
     {

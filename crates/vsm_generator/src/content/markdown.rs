@@ -1,5 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    fmt,
+    path::{Path, PathBuf},
+};
 
+use chrono::{DateTime, Utc};
 use pulldown_cmark::{html, Parser};
 use tokio::fs;
 use url::Url;
@@ -39,7 +44,10 @@ pub async fn get_template(context: &Context, path: &Path) -> anyhow::Result<Path
 }
 
 pub async fn set_variable(path: &Path, variables: &mut ContentVariables) -> anyhow::Result<()> {
-    let file_content = fs::read_to_string(path).await?;
+    let mut file_content = fs::read_to_string(path).await?;
+    let md_variables = extract_variables(&mut file_content)?;
+    let process_variables = process_variables(variables, md_variables);
+
     let parser = Parser::new(file_content.as_str());
 
     let mut html = String::new();
@@ -48,16 +56,71 @@ pub async fn set_variable(path: &Path, variables: &mut ContentVariables) -> anyh
     let cite_notes = generate_cite_notes(&mut html).await;
     let table_of_contents = generate_table_of_contents(&html).await;
 
+    process_variables.await;
     variables.insert("md_content".to_owned(), html.into_bytes());
     variables.insert("md_cite_notes".to_owned(), cite_notes.into_bytes());
     variables.insert(
-        "md_table_of_contents".to_owned(),
-        table_of_contents.into_bytes(),
+        "md_table_of_contents_desktop".to_owned(),
+        table_of_contents.0.into_bytes(),
+    );
+    variables.insert(
+        "md_table_of_contents_mobile".to_owned(),
+        table_of_contents.1.into_bytes(),
     );
     Ok(())
 }
 
-async fn generate_table_of_contents(html: &str) -> String {
+fn extract_variables(file_content: &mut String) -> anyhow::Result<HashMap<String, VariableValue>> {
+    const VARIABLE_KEY: &str = "---";
+
+    let Some(start) = file_content.find(VARIABLE_KEY) else {
+        return Ok(HashMap::default());
+    };
+
+    let start_with_key = start + VARIABLE_KEY.len();
+    let Some(end) = file_content[start_with_key..].find(VARIABLE_KEY) else {
+        return Ok(HashMap::default());
+    };
+
+    let mut result = HashMap::new();
+
+    let variable_text = &file_content[start_with_key..start_with_key + end];
+    for line in variable_text.lines() {
+        let mut parts = line.splitn(2, ':');
+        if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
+            let value = VariableValue::from_str(value);
+            result.insert(key.trim().to_owned(), value);
+        }
+    }
+
+    file_content.replace_range(start..start_with_key + end + VARIABLE_KEY.len(), "");
+    Ok(result)
+}
+
+async fn process_variables(
+    variables: &mut ContentVariables,
+    md_variables: HashMap<String, VariableValue>,
+) {
+    for (key, value) in md_variables {
+        match value {
+            VariableValue::String(str) => variables.insert(key, str.into_bytes()),
+            VariableValue::Array(_array) => {
+                tracing::warn!("Array variables are not supported yet.");
+            }
+            VariableValue::Date(date) => variables.insert(
+                key,
+                format!(
+                    r#"{}<div class="tooltip">{}</div>"#,
+                    date.format("%e %B %Y"),
+                    date.format("%A, %e %B %Y %H:%M:%S UTC")
+                )
+                .into_bytes(),
+            ),
+        };
+    }
+}
+
+async fn generate_table_of_contents(html: &str) -> (String, String) {
     let mut table_of_contents = String::new();
     let mut index = 0;
 
@@ -96,17 +159,19 @@ async fn generate_table_of_contents(html: &str) -> String {
 
     generate_element_for_table_of_contents(&mut table_of_contents, header, 2, last_level);
 
-    if table_of_contents.is_empty() {
+    let is_empty = table_of_contents.is_empty();
+    if is_empty {
         table_of_contents.push_str("Unfortunatelly, there are no headers in this article :(");
     } else {
-        table_of_contents.insert_str(0, "<li><a class=\"top\" href=\"#\">(Top)</a></li>");
-        table_of_contents.insert_str(
-            table_of_contents.len() - 5,
-            "<li><a href=\"#references\">References</a></li>",
-        );
+        table_of_contents.push_str("<li><a href=\"#references\">References</a></li>");
     }
 
-    table_of_contents
+    let mut desktop_table_of_contents = table_of_contents.clone();
+    if !is_empty {
+        desktop_table_of_contents.insert_str(0, "<li><a class=\"top\" href=\"#\">(Top)</a></li>");
+    }
+
+    (desktop_table_of_contents, table_of_contents)
 }
 
 fn generate_element_for_table_of_contents(
@@ -241,5 +306,58 @@ fn get_description_of_cite_note(html: &str, bracket_index: usize) -> Option<&str
         None
     } else {
         Some(trimmed)
+    }
+}
+
+enum VariableValue {
+    String(String),
+    Array(Vec<VariableValue>),
+    Date(DateTime<Utc>),
+}
+
+impl VariableValue {
+    fn from_str(value: &str) -> Self {
+        let value = value.trim();
+        if value.starts_with('[') {
+            let mut array = Vec::new();
+            for value in value[1..value.len() - 1].split(',') {
+                array.push(Self::from_str(value));
+            }
+
+            if !value.ends_with(']') {
+                tracing::warn!("Array variable is not closed with ']' character.");
+            }
+
+            VariableValue::Array(array)
+        } else if value.starts_with('"') {
+            if !value.ends_with('"') {
+                tracing::warn!("String variable is not closed with '\"' character.");
+            }
+
+            VariableValue::String(value[1..value.len() - 1].trim().to_owned())
+        } else {
+            let date = value.parse::<DateTime<Utc>>().unwrap();
+            VariableValue::Date(date)
+        }
+    }
+}
+
+impl fmt::Display for VariableValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VariableValue::String(value) => write!(f, "{}", value),
+            VariableValue::Array(array) => {
+                write!(f, "[")?;
+                for (index, value) in array.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "{}", value)?;
+                }
+                write!(f, "]")
+            }
+            VariableValue::Date(date) => write!(f, "{}", date.to_rfc3339()),
+        }
     }
 }
