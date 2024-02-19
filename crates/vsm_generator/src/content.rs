@@ -297,10 +297,7 @@ async fn create_html_file(
     }
 
     #[cfg(not(debug_assertions))]
-    let minified = String::from_utf8(minify_html::minify(
-        reader.get_ref().get_ref().as_bytes(),
-        &minify_html::Cfg::spec_compliant(),
-    ))?;
+    let minified = minify::html::minify(reader.get_ref().get_ref());
     #[cfg(debug_assertions)]
     let minified = reader.into_inner().into_inner();
 
