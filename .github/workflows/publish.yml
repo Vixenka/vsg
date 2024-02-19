@@ -1,0 +1,28 @@
+name: Publish
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches:
+      - master
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build
+        run: cargo build --release'
+      - name: Copy artifacts
+        run: |
+          cp target/release/vsm release/
+          cp target/release/vsm_generator release/
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release
+          path: release
+          
