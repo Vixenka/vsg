@@ -28,18 +28,6 @@ jobs:
 
       - name: Build
         run: cargo build --release
-
-      - name: Save cache
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-
       - name: Copy artifacts
         run: |
           mkdir release
