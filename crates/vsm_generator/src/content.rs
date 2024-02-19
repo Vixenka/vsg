@@ -1,9 +1,10 @@
 use std::{
-    io::Cursor,
+    io::{Cursor, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+use flate2::{write::ZlibEncoder, Compression};
 use quick_xml::{
     events::{BytesEnd, Event},
     name::QName,
@@ -204,10 +205,24 @@ async fn process_file(
     fs::create_dir_all(output_path.parent().unwrap())
         .await
         .expect("Unable to create directory.");
-    fs::File::create(output_path)
+    fs::File::create(&output_path)
         .await
         .expect("Unable to create file.")
         .write_all(html.as_bytes())
+        .await
+        .expect("Unable to write file.");
+
+    let mut compressed = Vec::new();
+    let mut encoder = ZlibEncoder::new(&mut compressed, Compression::best());
+    encoder
+        .write_all(html.as_bytes())
+        .expect("Unable to write to encoder.");
+
+    output_path.set_extension("html.deflate");
+    fs::File::create(&output_path)
+        .await
+        .expect("Unable to create file.")
+        .write_all(encoder.finish().expect("Unable to finish encoder."))
         .await
         .expect("Unable to write file.");
 
@@ -282,10 +297,10 @@ async fn create_html_file(
     }
 
     #[cfg(not(debug_assertions))]
-    let minified = minify_html::minify(
-        reader.get_ref().get_ref().as_slice(),
+    let minified = String::from_utf8(minify_html::minify(
+        reader.get_ref().get_ref().as_bytes(),
         &minify_html::Cfg::spec_compliant(),
-    );
+    ))?;
     #[cfg(debug_assertions)]
     let minified = reader.into_inner().into_inner();
 

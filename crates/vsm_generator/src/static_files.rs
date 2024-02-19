@@ -1,8 +1,10 @@
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+use flate2::{write::ZlibEncoder, Compression};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
@@ -63,7 +65,7 @@ async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()
         .await
         .expect("Unable to read file.");
 
-    let output_path = Path::new(&context.args.output).join(
+    let mut output_path = Path::new(&context.args.output).join(
         path.strip_prefix(&context.args.project)
             .expect("Unable to strip prefix."),
     );
@@ -88,12 +90,27 @@ async fn process_file(context: Arc<Context>, path: PathBuf) -> anyhow::Result<()
     fs::create_dir_all(output_path.parent().unwrap())
         .await
         .expect("Unable to create directory.");
-    fs::File::create(output_path)
+    fs::File::create(&output_path)
         .await
         .expect("Unable to create file.")
         .write_all(buffer.as_slice())
         .await
         .expect("Unable to write file.");
+
+    let extension = path.extension().map_or("", |ext| ext.to_str().unwrap());
+    if extension == "png" || extension == "jpg" || extension == "jpeg" || extension == "webp" {
+        return Ok(());
+    }
+
+    let mut compressed = Vec::new();
+    let mut encoder = ZlibEncoder::new(&mut compressed, Compression::best());
+    encoder.write_all(buffer.as_slice())?;
+
+    output_path.set_extension(format!("{extension}.deflate"));
+    fs::File::create(output_path)
+        .await?
+        .write_all(encoder.finish()?)
+        .await?;
 
     Ok(())
 }

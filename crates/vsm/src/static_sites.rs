@@ -1,41 +1,98 @@
+use std::{net::SocketAddr, sync::Arc};
+
 use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    body::Body,
+    extract::{ConnectInfo, Path, Request, State},
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
+
 use tokio::fs;
 
-pub fn initialize(router: Router) -> Router {
+use crate::{analytics, helper, AppState};
+
+pub fn initialize(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router.route("/", get(root)).route("/*path", get(tree))
 }
 
-async fn root() -> Response {
-    serve_impl("index").await
+async fn root(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(socket_addr): ConnectInfo<SocketAddr>,
+    request: Request<Body>,
+) -> Response {
+    serve_impl(state, "index".to_owned(), socket_addr, request).await
 }
 
-async fn tree(Path(path): Path<String>) -> Response {
-    serve_impl(path.as_str()).await
+async fn tree(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    ConnectInfo(socket_addr): ConnectInfo<SocketAddr>,
+    request: Request<Body>,
+) -> Response {
+    serve_impl(state, path, socket_addr, request).await
 }
 
-async fn serve_impl(path: &str) -> Response {
-    let mut file_path = std::path::Path::new("./output/content").join(path);
+async fn serve_impl(
+    state: Arc<AppState>,
+    path: String,
+    socket_addr: SocketAddr,
+    request: Request<Body>,
+) -> Response {
+    let mut file_path = std::path::Path::new("./output/content").join(&path);
     if file_path.extension().is_some() {
-        return error_404(path);
+        return error_404(&path);
     }
 
-    file_path.set_extension("html");
-    let file_content = fs::read_to_string(file_path);
+    let accept_gzip = helper::accept_gzip(&request);
+    file_path.set_extension(match accept_gzip {
+        true => "html.deflate",
+        false => "html",
+    });
+
+    let file_content = fs::read(file_path);
+
+    let path_clone = path.clone();
+    tokio::spawn(async move { analytics::push(state, path_clone, socket_addr, request).await });
 
     match file_content.await {
         #[allow(unused_mut)]
         Ok(mut content) => {
             #[cfg(debug_assertions)]
-            content.push_str(crate::HOT_RELOAD_SCRIPT);
-            Html(content).into_response()
+            content.extend_from_slice(crate::HOT_RELOAD_SCRIPT);
+            serve_data(accept_gzip, content)
         }
-        Err(_) => error_404(path),
+        Err(_) => error_404(&path),
+    }
+}
+
+fn serve_data(accept_gzip: bool, content: Vec<u8>) -> Response {
+    match accept_gzip {
+        true => (
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/html; charset=utf-8"),
+                ),
+                (
+                    header::CONTENT_ENCODING,
+                    HeaderValue::from_static("deflate"),
+                ),
+            ],
+            content,
+        )
+            .into_response(),
+        false => (
+            StatusCode::OK,
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            )],
+            content,
+        )
+            .into_response(),
     }
 }
 

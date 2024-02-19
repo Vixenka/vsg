@@ -2,10 +2,16 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::{net::SocketAddr, sync::Arc};
+
 use axum::Router;
 use clap::{command, Parser};
-use tower_http::services::ServeDir;
+use database::Database;
 
+pub mod analytics;
+pub mod database;
+pub mod helper;
+pub mod static_files;
 pub mod static_sites;
 
 #[cfg(debug_assertions)]
@@ -15,7 +21,7 @@ lazy_static! {
 }
 
 #[cfg(debug_assertions)]
-static HOT_RELOAD_SCRIPT: &str = r#"
+static HOT_RELOAD_SCRIPT: &[u8] = br#"
     <script>
         function hotreload() {
             let socket = new WebSocket("ws://localhost:3000/ws/hotreload");
@@ -54,6 +60,11 @@ pub struct Args {
     output: String,
 }
 
+pub struct AppState {
+    pub args: Args,
+    pub database: Database,
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -61,9 +72,13 @@ async fn main() {
     let args = Args::parse();
     let generator = run_generator(&args);
 
+    let database = Database::open(&args)
+        .await
+        .expect("Failed to open database.");
+
     #[allow(unused_mut)]
-    let mut app = static_sites::initialize(Router::new())
-        .nest_service("/static", ServeDir::new("./output/static"));
+    let mut app = static_files::initialize(static_sites::initialize(Router::new()))
+        .with_state(Arc::new(AppState { args, database }));
 
     #[cfg(debug_assertions)]
     {
@@ -71,9 +86,12 @@ async fn main() {
     }
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app.into_make_service())
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 
     #[allow(dropping_copy_types)]
     drop(generator);
