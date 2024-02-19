@@ -1,4 +1,4 @@
-name: Publish
+name: Deploy
 
 on:
   pull_request:
@@ -8,14 +8,14 @@ on:
       - master
 
 jobs:
-  tests:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Build
-        run: cargo build --release'
+        run: cargo build --release
       - name: Copy artifacts
         run: |
           cp target/release/vsm release/
@@ -25,4 +25,3 @@ jobs:
         with:
           name: release
           path: release
-          
