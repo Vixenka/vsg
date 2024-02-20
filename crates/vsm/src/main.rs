@@ -2,7 +2,7 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::{net::SocketAddr, process::Stdio, sync::Arc};
+use std::{process::Stdio, sync::Arc};
 
 use api::ApiState;
 use axum::Router;
