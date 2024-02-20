@@ -25,6 +25,7 @@ async fn main() {
 
     let mut archive = Archive::new(tar);
     archive.unpack(".").expect("Unable to unpack");
+    tracing::info!("Unpacked binaries");
 }
 
 async fn get_latest_release(client: &Client) -> String {
