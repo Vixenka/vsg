@@ -13,6 +13,7 @@ jobs:
 
     steps:
       - name: Deploy vixenka.com
+        id: api
         uses: indiesdev/curl@v1.1
         with:
           url: https://vixenka.com/api/admin/deploy/server
