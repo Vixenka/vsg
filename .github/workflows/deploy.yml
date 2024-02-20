@@ -15,9 +15,11 @@ jobs:
       - name: Deploy vixenka.com
         uses: indiesdev/curl@v1.1
         with:
-            url: https://vixenka.com/api/admin/deploy/server
-            method: "POST"
-            accept: "200,201,204"
-            body: "${{ secrets.VIXENKA_COM_DEPLOY_SECRET }}"
-            timeout: 100000
-            retries: 3
+          url: https://vixenka.com/api/admin/deploy/server
+          method: "POST"
+          accept: "200,201,204"
+          body: "${{ secrets.VIXENKA_COM_DEPLOY_SECRET }}"
+          timeout: 100000
+          retries: 3
+      - name: "Print response"
+        run: echo ${{ steps.api.outputs.response }}
