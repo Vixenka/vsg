@@ -30,16 +30,10 @@ jobs:
       - name: Build
         run: cargo build --release --features deploy
 
-      - name: Save cache
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo
+      - name: Enforce cache update
+        run: |
+          STATE_CACHE_KEY="${{ runner.os }}-cargo"
+          echo "STATE_CACHE_KEY=${STATE_CACHE_KEY}" >> $GITHUB_ENV
 
       - name: Copy files
         run: |
