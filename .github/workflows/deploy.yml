@@ -38,15 +38,11 @@ jobs:
       - name: Get version
         run: echo "version=v0.1.0-alpha${{ github.run_number }}" >> $GITHUB_ENV 
 
-      - name: Create tag
-        uses: cardinalby/git-tag-action@master
-        env:
-          TAG: ${{ env.version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
           name: ${{ env.version }}
+          tag_name: ${{ env.version }}
           prerelease: true
           files: Linux-amd64.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
