@@ -19,4 +19,4 @@ jobs:
             method: "POST"
             accept: "200,201,204"
             body: "${{ secrets.VIXENKA_COM_DEPLOY_SECRET }}"
-            retires: 3
+            retries: 3
