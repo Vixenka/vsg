@@ -22,7 +22,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo
 
       - name: Build
         run: cargo build --release --features deploy
@@ -35,10 +35,17 @@ jobs:
       - name: Compress files
         run: tar -czvf Linux-amd64.tar.gz release
 
+      - name: Get version
+        run: echo "version=v0.1.0-alpha${{ github.run_number }}" >> $Env:GITHUB_ENV 
+
+      - name: Create tag
+        run: |
+          git tag ${{ env.version }}
+          git push origin ${{ env.version }}
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
-          name: v0.1.0-alpha${{ github.run_number }}
+          name: ${{ env.version }}
           prerelease: true
           files: Linux-amd64.tar.gz
           token: ${{ secrets.GITHUB_TOKEN }}
