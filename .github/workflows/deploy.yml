@@ -27,7 +27,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --features deploy
       - name: Copy artifacts
         run: |
           mkdir release

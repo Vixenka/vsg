@@ -2,7 +2,7 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, process::Stdio, sync::Arc};
 
 use axum::Router;
 use clap::{command, Parser};
@@ -58,6 +58,9 @@ pub struct Args {
     /// Path to the output directory
     #[arg(short, long, default_value = "./output")]
     output: String,
+    // Page port
+    #[arg(long, default_value = "3000")]
+    port: u16,
 }
 
 pub struct AppState {
@@ -70,22 +73,29 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-    let generator = run_generator(&args);
+    let generator = tokio::spawn(run_generator(args.clone()));
 
     let database = Database::open(&args)
         .await
         .expect("Failed to open database.");
 
     #[allow(unused_mut)]
-    let mut app = static_files::initialize(static_sites::initialize(Router::new()))
-        .with_state(Arc::new(AppState { args, database }));
+    let mut app = static_files::initialize(static_sites::initialize(Router::new())).with_state(
+        Arc::new(AppState {
+            args: args.clone(),
+            database,
+        }),
+    );
 
     #[cfg(debug_assertions)]
     {
         app = app.route("/ws/hotreload", axum::routing::get(hot_reload_handler))
     }
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port))
+        .await
+        .unwrap();
+    tracing::info!("Serve website on http://localhost:{}", args.port);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -94,20 +104,20 @@ async fn main() {
     .unwrap();
 
     #[allow(dropping_copy_types)]
-    drop(generator);
+    drop(generator.await);
 }
 
 #[cfg(not(debug_assertions))]
 #[allow(clippy::unused_unit)]
-fn run_generator(args: &Args) -> () {
-    run_generator_impl(args)
+async fn run_generator(args: Args) -> () {
+    run_generator_impl(&args)
 }
 
 #[cfg(debug_assertions)]
-fn run_generator(args: &Args) -> notify::ReadDirectoryChangesWatcher {
+async fn run_generator(args: Args) -> notify::ReadDirectoryChangesWatcher {
     use notify::Watcher;
 
-    run_generator_impl(args);
+    run_generator_impl(&args);
 
     let mut watcher = notify::recommended_watcher(|res| match res {
         Ok(_) => {
@@ -130,19 +140,39 @@ fn run_generator(args: &Args) -> notify::ReadDirectoryChangesWatcher {
 fn run_generator_impl(args: &Args) {
     tracing::info!("Running generator for project: {}", args.project);
 
-    let mut command_args = vec!["run", "--bin", "vsm_generator"];
-    #[cfg(not(debug_assertions))]
+    let executable;
+    let mut command_args = Vec::new();
+    #[cfg(not(feature = "deploy"))]
     {
-        command_args.push("--release");
-    }
-    command_args.extend_from_slice(&["--", "--project", &args.project, "--output", &args.output]);
+        executable = "cargo";
+        command_args.extend_from_slice(&["run", "--bin", "vsm_generator"]);
 
-    let output = std::process::Command::new("cargo")
+        #[cfg(not(debug_assertions))]
+        {
+            command_args.push("--release");
+        }
+
+        command_args.push("--");
+    }
+    #[cfg(feature = "deploy")]
+    {
+        executable = "vsm_generator";
+    }
+    command_args.extend_from_slice(&["--project", &args.project, "--output", &args.output]);
+
+    let child = std::process::Command::new(executable)
         .args(command_args.as_slice())
-        .output()
+        .stdout(Stdio::inherit())
+        .spawn()
         .expect("Failed to execute process");
 
-    println!("{}", String::from_utf8_lossy(&output.stdout).trim());
+    let output = child
+        .wait_with_output()
+        .expect("Failed to wait for process");
+
+    if !output.status.success() {
+        tracing::error!("Generator failed: {:?}", output.status);
+    }
 }
 
 #[cfg(debug_assertions)]
