@@ -1,0 +1,10 @@
+[Unit]
+Description=VSM pages
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+User={{ USER }}
+WorkingDirectory=/home/{{ USER }}/vsm
+ExecStart=/home/{{ USER }}/vsm/vsm --project ../vixenka.com

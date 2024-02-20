@@ -17,6 +17,7 @@ use crate::{analytics, helper, AppState};
 pub fn initialize(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router.route("/static/*path", get(serve))
 }
+
 async fn serve(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,

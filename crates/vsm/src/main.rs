@@ -4,11 +4,13 @@ extern crate lazy_static;
 
 use std::{net::SocketAddr, process::Stdio, sync::Arc};
 
+use api::ApiState;
 use axum::Router;
 use clap::{command, Parser};
 use database::Database;
 
 pub mod analytics;
+pub mod api;
 pub mod database;
 pub mod helper;
 pub mod static_files;
@@ -66,6 +68,7 @@ pub struct Args {
 pub struct AppState {
     pub args: Args,
     pub database: Database,
+    pub api: ApiState,
 }
 
 #[tokio::main]
@@ -79,17 +82,19 @@ async fn main() {
         .await
         .expect("Failed to open database.");
 
+    let router = static_files::initialize(static_sites::initialize(Router::new()));
+    let (api, router) = api::initialize(router);
+
     #[allow(unused_mut)]
-    let mut app = static_files::initialize(static_sites::initialize(Router::new())).with_state(
-        Arc::new(AppState {
-            args: args.clone(),
-            database,
-        }),
-    );
+    let mut router = router.with_state(Arc::new(AppState {
+        args: args.clone(),
+        database,
+        api,
+    }));
 
     #[cfg(debug_assertions)]
     {
-        app = app.route("/ws/hotreload", axum::routing::get(hot_reload_handler))
+        router = router.route("/ws/hotreload", axum::routing::get(hot_reload_handler))
     }
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port))
@@ -98,7 +103,7 @@ async fn main() {
     tracing::info!("Serve website on http://localhost:{}", args.port);
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
+        router.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
     .unwrap();
@@ -156,7 +161,7 @@ fn run_generator_impl(args: &Args) {
     }
     #[cfg(feature = "deploy")]
     {
-        executable = "vsm_generator";
+        executable = "./vsm_generator";
     }
     command_args.extend_from_slice(&["--project", &args.project, "--output", &args.output]);
 
