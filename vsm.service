@@ -7,4 +7,4 @@ Type=simple
 Restart=always
 User={{ USER }}
 WorkingDirectory=/home/{{ USER }}/vsm
-ExecStart=/home/{{ USER }}/vsm/vsm --project ../vixenka.com
+ExecStart=/home/{{ USER }}/vsm/vsm --project ../vixenka.com --port 3000

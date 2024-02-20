@@ -1,8 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Path, Request, State},
+    extract::{Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -17,29 +17,19 @@ pub fn initialize(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
     router.route("/", get(root)).route("/*path", get(tree))
 }
 
-async fn root(
-    State(state): State<Arc<AppState>>,
-    ConnectInfo(socket_addr): ConnectInfo<SocketAddr>,
-    request: Request<Body>,
-) -> Response {
-    serve_impl(state, "index".to_owned(), socket_addr, request).await
+async fn root(State(state): State<Arc<AppState>>, request: Request<Body>) -> Response {
+    serve_impl(state, "index".to_owned(), request).await
 }
 
 async fn tree(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
-    ConnectInfo(socket_addr): ConnectInfo<SocketAddr>,
     request: Request<Body>,
 ) -> Response {
-    serve_impl(state, path, socket_addr, request).await
+    serve_impl(state, path, request).await
 }
 
-async fn serve_impl(
-    state: Arc<AppState>,
-    path: String,
-    socket_addr: SocketAddr,
-    request: Request<Body>,
-) -> Response {
+async fn serve_impl(state: Arc<AppState>, path: String, request: Request<Body>) -> Response {
     let mut file_path = std::path::Path::new("./output/content").join(&path);
     if file_path.extension().is_some() {
         return error_404(&path);
@@ -54,7 +44,7 @@ async fn serve_impl(
     let file_content = fs::read(file_path);
 
     let path_clone = path.clone();
-    tokio::spawn(async move { analytics::push(state, path_clone, socket_addr, request).await });
+    tokio::spawn(async move { analytics::push(state, path_clone, request).await });
 
     match file_content.await {
         #[allow(unused_mut)]

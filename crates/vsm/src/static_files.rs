@@ -1,8 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Path, Request, State},
+    extract::{Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -21,7 +21,6 @@ pub fn initialize(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
 async fn serve(
     State(state): State<Arc<AppState>>,
     Path(path): Path<String>,
-    ConnectInfo(socket_addr): ConnectInfo<SocketAddr>,
     request: Request<Body>,
 ) -> Response {
     let mut file_path = std::path::Path::new("./output/static").join(&path);
@@ -46,7 +45,7 @@ async fn serve(
     let file_content = fs::read(&file_path);
 
     let path_clone = path.clone();
-    tokio::spawn(async move { analytics::push(state, path_clone, socket_addr, request).await });
+    tokio::spawn(async move { analytics::push(state, path_clone, request).await });
 
     match file_content.await {
         #[allow(unused_mut)]

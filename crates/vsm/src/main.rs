@@ -99,14 +99,12 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", args.port))
         .await
-        .unwrap();
+        .expect("Unable to start listener.");
     tracing::info!("Serve website on http://localhost:{}", args.port);
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .unwrap();
+
+    axum::serve(listener, router.into_make_service())
+        .await
+        .expect("Unable to start server.");
 
     #[allow(dropping_copy_types)]
     drop(generator.await);
