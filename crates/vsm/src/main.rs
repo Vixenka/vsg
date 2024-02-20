@@ -175,6 +175,8 @@ fn run_generator_impl(args: &Args) {
 
     if !output.status.success() {
         tracing::error!("Generator failed: {:?}", output.status);
+    } else {
+        tracing::info!("Generator finished");
     }
 }
 

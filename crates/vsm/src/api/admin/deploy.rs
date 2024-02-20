@@ -73,7 +73,7 @@ async fn site(State(state): State<Arc<AppState>>, body: String) -> Response {
                     .api
                     .admin
                     .deploy
-                    .server_deployed
+                    .site_deployed
                     .store(false, Ordering::Relaxed);
             });
             #[cfg(debug_assertions)]
@@ -82,7 +82,7 @@ async fn site(State(state): State<Arc<AppState>>, body: String) -> Response {
                     .api
                     .admin
                     .deploy
-                    .server_deployed
+                    .site_deployed
                     .store(false, Ordering::Relaxed);
             }
 
@@ -97,7 +97,7 @@ async fn site(State(state): State<Arc<AppState>>, body: String) -> Response {
                 .api
                 .admin
                 .deploy
-                .server_deployed
+                .site_deployed
                 .store(false, Ordering::Relaxed);
 
             tracing::error!("Site deploying failed: {:?}", e);
