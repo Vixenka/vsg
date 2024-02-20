@@ -32,6 +32,7 @@ async fn tree(
 async fn serve_impl(state: Arc<AppState>, path: String, request: Request<Body>) -> Response {
     let mut file_path = std::path::Path::new("./output/content").join(&path);
     if file_path.extension().is_some() {
+        tokio::spawn(analytics::push(state, path.clone(), request));
         return error_404(&path);
     }
 
@@ -43,8 +44,7 @@ async fn serve_impl(state: Arc<AppState>, path: String, request: Request<Body>) 
 
     let file_content = fs::read(file_path);
 
-    let path_clone = path.clone();
-    tokio::spawn(async move { analytics::push(state, path_clone, request).await });
+    tokio::spawn(analytics::push(state, path.clone(), request));
 
     match file_content.await {
         #[allow(unused_mut)]

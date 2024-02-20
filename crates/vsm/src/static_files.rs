@@ -44,8 +44,7 @@ async fn serve(
 
     let file_content = fs::read(&file_path);
 
-    let path_clone = path.clone();
-    tokio::spawn(async move { analytics::push(state, path_clone, request).await });
+    tokio::spawn(analytics::push(state, path.clone(), request));
 
     match file_content.await {
         #[allow(unused_mut)]
