@@ -26,7 +26,7 @@ jobs:
           key: ${{ runner.os }}-cargo
 
       - name: Use LLD
-        run: echo -en "[target.x86_64-unknown-linux-gnu]\nlinker = \"clang\"\nrustflags = [\"-C\", \"link-arg=-fuse-ld=lld\", \"-Zshare-generics=y\"]\n" > ~/.cargo/config.toml
+        run: echo -en "[target.x86_64-unknown-linux-gnu]\nlinker = \"clang\"\nrustflags = [\"-C\", \"link-arg=-fuse-ld=lld\"]\n" > ~/.cargo/config.toml
       - name: Build
         run: cargo build --release --features deploy
 
