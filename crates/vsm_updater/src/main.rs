@@ -1,6 +1,14 @@
+use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use tar::Archive;
+
+#[derive(Serialize, Deserialize)]
+struct Release {
+    tag_name: String,
+    published_at: DateTime<Utc>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -29,21 +37,19 @@ async fn main() {
 }
 
 async fn get_latest_release(client: &Client) -> String {
-    let releases = client
+    let mut releases = client
         .get("https://api.github.com/repos/Vixenka/vsm/releases")
         .header("User-Agent", "vsm_updater")
         .send()
         .await
         .expect("Failed to get releases")
-        .text()
+        .json::<Vec<Release>>()
         .await
         .expect("Failed to get releases string");
 
-    const START_TEXT: &str = "\"tag_name\":\"";
-    let start = releases.find(START_TEXT).expect("Failed to find start") + START_TEXT.len();
-    let end = releases[start..].find('"').expect("Unable to find end") + start;
+    releases.sort_by(|a, b| a.published_at.cmp(&b.published_at));
+    let release = releases.pop().expect("No releases found");
 
-    let string = releases[start..end].to_owned();
-    tracing::info!("Latest release: {}", &string);
-    string
+    tracing::info!("Latest release: {}", &release.tag_name);
+    release.tag_name
 }
