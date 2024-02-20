@@ -33,8 +33,10 @@ jobs:
           mkdir release
           cp target/release/vsm release/
           cp target/release/vsm_generator release/
+          cp target/release/vsm_updater release/
       - name: Compress files
-        run: tar -czvf Linux-amd64.tar.gz release/*
+        working-directory: ./release
+        run: tar -czvf ../Linux-amd64.tar.gz *
 
       - name: Get version
         run: echo "version=v0.1.0-alpha${{ github.run_number }}" >> $GITHUB_ENV 
