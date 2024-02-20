@@ -67,7 +67,7 @@ fn deploy_server() -> anyhow::Result<()> {
     #[cfg(feature = "deploy")]
     {
         let child = std::process::Command::new("./vsm_updater")
-            .stdout(Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
             .spawn()?;
 
         let output = child.wait_with_output()?;
