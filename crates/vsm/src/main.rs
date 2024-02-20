@@ -112,7 +112,7 @@ async fn main() {
 
 #[cfg(not(debug_assertions))]
 #[allow(clippy::unused_unit)]
-async fn run_generator(args: Args) -> () {
+pub async fn run_generator(args: Args) -> () {
     run_generator_impl(&args)
 }
 
