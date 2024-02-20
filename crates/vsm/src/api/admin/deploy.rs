@@ -1,4 +1,11 @@
-use std::{fs, path::Path, sync::Arc};
+use std::{
+    fs,
+    path::Path,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use axum::{
     extract::State,
@@ -13,11 +20,15 @@ use crate::AppState;
 
 pub struct DeployState {
     key: String,
+    server_deployed: AtomicBool,
 }
 
 pub fn initialize(router: Router<Arc<AppState>>) -> (DeployState, Router<Arc<AppState>>) {
     (
-        DeployState { key: get_key() },
+        DeployState {
+            key: get_key(),
+            server_deployed: AtomicBool::new(false),
+        },
         router.route("/api/admin/deploy/server", post(server)),
     )
 }
@@ -39,6 +50,16 @@ async fn server(State(state): State<Arc<AppState>>, body: String) -> Response {
         return (StatusCode::FORBIDDEN, "Invalid key").into_response();
     }
 
+    if state
+        .api
+        .admin
+        .deploy
+        .server_deployed
+        .swap(true, Ordering::Relaxed)
+    {
+        return (StatusCode::OK, "Server already deploying").into_response();
+    }
+
     match deploy_server() {
         Ok(()) => {
             tokio::spawn(async {
@@ -55,6 +76,13 @@ async fn server(State(state): State<Arc<AppState>>, body: String) -> Response {
                 .into_response()
         }
         Err(e) => {
+            state
+                .api
+                .admin
+                .deploy
+                .server_deployed
+                .store(false, Ordering::Relaxed);
+
             tracing::error!("Deploying failed: {:?}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Deploying failed").into_response()
         }
