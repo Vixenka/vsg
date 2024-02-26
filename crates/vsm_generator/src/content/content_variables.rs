@@ -11,9 +11,9 @@ pub struct ContentVariables {
 
 impl ContentVariables {
     pub fn new() -> Self {
-        Self {
-            variables: HashMap::new(),
-        }
+        let mut variables = HashMap::new();
+        variables.insert("warning".to_owned(), String::new());
+        Self { variables }
     }
 
     pub fn insert(&mut self, key: String, value: String) {

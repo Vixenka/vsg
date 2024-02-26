@@ -166,7 +166,19 @@ pub async fn set_variables(
     }
     variables.insert("md_tags".to_owned(), tags);
 
+    variables.insert("warning".to_owned(), get_draft_info(&content));
+
     Ok(content)
+}
+
+fn get_draft_info(content: &MarkdownContent) -> String {
+    match content.draft {
+        true => {
+            "<p class=\"warning\">This article is still a draft, changes may occur and should not be taken seriously</p>"
+                .to_owned()
+        }
+        false => "".to_owned(),
+    }
 }
 
 fn extract_variables(file_content: &mut String) -> anyhow::Result<HashMap<String, VariableValue>> {
