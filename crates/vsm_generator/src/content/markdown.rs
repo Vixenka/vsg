@@ -49,6 +49,7 @@ pub struct MarkdownContent {
     pub link: String,
     pub title: String,
     pub description: String,
+    pub tags: Vec<String>,
     pub date: DateTime<Utc>,
     pub draft: bool,
     pub technical: bool,
@@ -73,6 +74,27 @@ impl MarkdownContent {
         match Self::get_element(key, md_variables)? {
             VariableValue::String(str) => Ok(str.clone()),
             _ => anyhow::bail!("Variable '{}' is not a string.", key),
+        }
+    }
+
+    fn get_element_string_vec(
+        key: &str,
+        md_variables: &HashMap<String, VariableValue>,
+    ) -> anyhow::Result<Vec<String>> {
+        match Self::get_element(key, md_variables)? {
+            VariableValue::Array(array) => {
+                let mut result = Vec::new();
+                for value in array {
+                    if let VariableValue::String(str) = value {
+                        result.push(str.clone());
+                    } else {
+                        anyhow::bail!("Variable '{}' is not an array of strings.", key);
+                    }
+                }
+
+                Ok(result)
+            }
+            _ => anyhow::bail!("Variable '{}' is not an array.", key),
         }
     }
 
@@ -138,6 +160,12 @@ pub async fn set_variables(
         table_of_contents.1,
     );
 
+    let mut tags = String::new();
+    for tag in &content.tags {
+        tags.push_str(format!("<a>#<strong>{}</strong></a>", tag).as_str());
+    }
+    variables.insert("md_tags".to_owned(), tags);
+
     Ok(content)
 }
 
@@ -202,6 +230,7 @@ async fn process_variables(
         link: context.get_file_link(path),
         title: MarkdownContent::get_element_string("title", &md_variables)?,
         description: MarkdownContent::get_element_string("description", &md_variables)?,
+        tags: MarkdownContent::get_element_string_vec("tags", &md_variables)?,
         date: MarkdownContent::get_element_date("date", &md_variables)?,
         draft: MarkdownContent::get_element_bool("draft", &md_variables)?,
         technical: MarkdownContent::get_element_bool("technical", &md_variables)?,

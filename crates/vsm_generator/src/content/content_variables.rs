@@ -72,7 +72,7 @@ impl ContentVariables {
             }
 
             let variable_content = match key {
-                "md_posts" => context.md_post_list.get().unwrap(),
+                "md_post_list" => context.md_post_list.get().unwrap(),
                 _ => match self.variables.get(key) {
                     Some(variable_content) => variable_content,
                     None => {

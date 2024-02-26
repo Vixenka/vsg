@@ -358,7 +358,11 @@ fn upgrade_header(
     {
         return;
     }
+
     let last_start_position = last_start_position.take().unwrap();
+    if !reader.get_ref().get_ref()[last_start_position - 4..last_start_position].starts_with("<h") {
+        return;
+    }
 
     let start_position = last_start_position - e.len() - 2;
     let id = get_id_from_name(&reader.get_mut().get_mut()[last_start_position..position - 5]);

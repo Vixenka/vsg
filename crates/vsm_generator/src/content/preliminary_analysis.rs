@@ -70,7 +70,7 @@ pub async fn create_md_post_list(
                         </div>
                     </div>
                     <p>{}</p>
-                </div>"#,
+                    <div class="post-list-tags">"#,
                 content.link,
                 content.title,
                 content.date.format("%e&nbsp;%B&nbsp;%Y"),
@@ -79,6 +79,16 @@ pub async fn create_md_post_list(
             )
             .as_str(),
         );
+
+        for tag in &content.tags {
+            result.push_str(format!("<a>#{}</a>", tag).as_str());
+        }
+
+        result.push_str("</div></div>");
+    }
+
+    if result.is_empty() {
+        result.push_str("<p>Unfortunately, page still don't have any posts :(</p>");
     }
 
     Ok(result)
