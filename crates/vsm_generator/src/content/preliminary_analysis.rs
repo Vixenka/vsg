@@ -54,7 +54,7 @@ pub async fn create_md_post_list(
             Some(c) => Some(c),
             None => None,
         })
-        .skip_while(|v| v.draft)
+        .filter(|v| !v.draft)
         .collect::<Vec<_>>();
     vec.sort_by(|a, b| b.date.cmp(&a.date));
 
