@@ -143,8 +143,8 @@ pub fn get_id_from_name(name: &str) -> String {
     for c in name.trim().chars() {
         if c.is_ascii_alphanumeric() {
             result.push(c.to_ascii_lowercase());
-        } else if c == ' ' || c == '-' {
-            result.push('_');
+        } else if c == ' ' || c == '_' {
+            result.push('-');
         }
     }
 
