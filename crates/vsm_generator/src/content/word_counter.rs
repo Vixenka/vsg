@@ -1,10 +1,14 @@
-use super::{content_variables::ContentVariables, markdown::MarkdownContent};
+use super::{content_variables::ContentVariables, preliminary_analysis::Content};
 
 pub fn compute_read_time(
     file_content: &str,
-    content: &mut MarkdownContent,
+    content: &mut Content,
     variables: &mut ContentVariables,
 ) {
+    let Content::Blog(content) = content else {
+        return;
+    };
+
     let word_count = words_count::count(file_content).words as u64;
     variables.insert("md_word_count".to_owned(), word_count.to_string());
 

@@ -27,6 +27,8 @@ impl ContentVariables {
         context: &Arc<Context>,
         result: &mut ContentResult,
     ) {
+        let mut use_variables: bool = true;
+
         while let Some(start) = data[range.start..range.end].find("{{") {
             range.start += start;
             let mut end = match data[range.start..range.end].find("}}") {
@@ -41,6 +43,31 @@ impl ContentVariables {
             };
 
             let mut key = &data[range.start + 2..end - 2];
+            if key.starts_with("#if") {
+                key = key[3..].trim();
+                let negation = key.starts_with('!');
+                if negation {
+                    key = &key[1..];
+                }
+
+                use_variables = negation != self.variables.contains_key(key);
+
+                data.replace_range(range.start..end, "");
+                range.end -= end - range.start;
+                continue;
+            } else if key.starts_with("#endif") {
+                use_variables = true;
+                data.replace_range(range.start..end, "");
+                range.end -= end - range.start;
+                continue;
+            }
+
+            if !use_variables {
+                data.replace_range(range.start..end, "");
+                range.end -= end - range.start;
+                continue;
+            }
+
             if let Some(set) = key.find(':') {
                 let mut key_start = range.start + set + 3;
                 while let Some(s) = data[key_start..end - 2].find("{{") {
@@ -80,7 +107,9 @@ impl ContentVariables {
                             "Unable to find variable with key '{}'",
                             key
                         ));
-                        return;
+
+                        range.start = end;
+                        continue;
                     }
                 },
             };

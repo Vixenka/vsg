@@ -6,7 +6,7 @@ use std::{
 
 use flate2::{write::ZlibEncoder, Compression};
 use quick_xml::{
-    events::{BytesEnd, Event},
+    events::{BytesEnd, BytesStart, Event},
     name::QName,
     Reader,
 };
@@ -88,7 +88,7 @@ pub async fn process_content(context: &Arc<Context>) -> anyhow::Result<ContentRe
         }
     }
 
-    let md_post_list = preliminary_analysis::create_md_post_list(&preliminary_outputs).await?;
+    let md_post_list = markdown::create_md_post_list(&preliminary_outputs).await?;
     context
         .md_post_list
         .set(md_post_list)
@@ -256,7 +256,6 @@ async fn create_html_file(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                last_start_position = Some(reader.buffer_position());
                 let element_name = get_element_name(&e.name(), &mut reader, template_path)?;
 
                 if let Some(template) = context.templates.get(element_name) {
@@ -268,17 +267,29 @@ async fn create_html_file(
                         .replace_range(start_position..position, &template.data);
 
                     set_reader_position(&mut reader, context, variables, 0, result);
+                    continue;
+                } else if element_name == "img" {
+                    upgrade_image(
+                        &e,
+                        &mut reader,
+                        &mut last_start_position,
+                        &mut last_edited_position,
+                    );
                 }
+
+                last_start_position = Some(reader.buffer_position());
             }
             Ok(Event::End(e)) => {
                 let element_name = get_element_name(&e.name(), &mut reader, template_path)?;
-                upgrade_header(
+                if upgrade_header(
                     &e,
                     element_name,
                     &mut reader,
                     &mut last_start_position,
                     &mut last_edited_position,
-                );
+                ) {
+                    set_reader_position(&mut reader, context, variables, 0, result);
+                }
             }
             Ok(Event::Eof) => break,
             Err(error) => {
@@ -346,7 +357,7 @@ fn upgrade_header(
     reader: &mut Reader<Cursor<String>>,
     last_start_position: &mut Option<usize>,
     last_edited_position: &mut usize,
-) {
+) -> bool {
     let mut position = reader.buffer_position();
     if !(element_name.starts_with('h')
         && element_name
@@ -356,12 +367,12 @@ fn upgrade_header(
         || last_start_position.is_none()
         || position < *last_edited_position + 1
     {
-        return;
+        return false;
     }
 
     let last_start_position = last_start_position.take().unwrap();
     if !reader.get_ref().get_ref()[last_start_position - 4..last_start_position].starts_with("<h") {
-        return;
+        return false;
     }
 
     let start_position = last_start_position - e.len() - 2;
@@ -383,4 +394,20 @@ fn upgrade_header(
         .replace_range(position..position, "</a>");
 
     *last_edited_position = position + 9;
+    true
+}
+
+fn upgrade_image(
+    e: &BytesStart,
+    reader: &mut Reader<Cursor<String>>,
+    last_start_position: &mut Option<usize>,
+    last_edited_position: &mut usize,
+) {
+    let mut position = reader.buffer_position();
+
+    tracing::info!(
+        "Image: {}",
+        &reader.get_ref().get_ref()[last_start_position.unwrap_or_default()..position]
+            .contains("webm")
+    );
 }

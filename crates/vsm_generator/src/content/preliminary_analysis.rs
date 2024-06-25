@@ -1,33 +1,42 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use crate::Context;
 
 use super::{
     content_variables::ContentVariables,
-    markdown::{self, MarkdownContent},
+    markdown::{self, BlogContent, ExpContent},
 };
 
 pub struct PreliminaryAnalysisOutput {
     pub path: PathBuf,
     pub template_path: PathBuf,
     pub variables: ContentVariables,
-    pub content: Option<MarkdownContent>,
+    pub content: Option<Content>,
+}
+
+pub enum Content {
+    Blog(BlogContent),
+    Exp(ExpContent),
 }
 
 pub async fn analyze_file(
     context: Arc<Context>,
     path: PathBuf,
 ) -> anyhow::Result<PreliminaryAnalysisOutput> {
-    tracing::trace!("Analyzing file '{}'", path.display());
+    tracing::info!("Analyzing file '{}'", path.display());
 
     let mut variables = ContentVariables::new();
     variables.insert("link".to_owned(), context.get_file_link(&path));
 
     let mut content = None;
-    let template_path = match path.extension().expect("Unable to get extension").to_str() {
+    let extension = path.extension().expect("Unable to get extension").to_str();
+    let template_path = match extension {
         Some("md") => {
             let set_variable = markdown::set_variables(&context, &path, &mut variables);
-            let template_path = markdown::get_template(&context, &path);
+            let template_path = get_template(&context, &path);
 
             content = Some(set_variable.await?);
             template_path.await?
@@ -43,53 +52,120 @@ pub async fn analyze_file(
     })
 }
 
-pub async fn create_md_post_list(
-    outputs: &[Arc<PreliminaryAnalysisOutput>],
-) -> anyhow::Result<String> {
-    let mut result = String::new();
+async fn get_template(context: &Context, path: &Path) -> anyhow::Result<PathBuf> {
+    let mut template_path = path.to_path_buf();
+    let mut template_found = false;
 
-    let mut vec = outputs
-        .iter()
-        .filter_map(|v| match &v.content {
-            Some(c) => Some(c),
-            None => None,
-        })
-        .filter(|v| !v.draft)
-        .collect::<Vec<_>>();
-    vec.sort_by(|a, b| b.date.cmp(&a.date));
-
-    for content in vec {
-        result.push_str(
-            format!(
-                r#"<div class="post-list">
-                    <div class="post-list-top">
-                        <a href="{}">{}</a>
-                        <div class="tooltip-wrapper">
-                            {}
-                            <div class="tooltip">{}</div>
-                        </div>
-                    </div>
-                    <p>{}</p>
-                    <div class="post-list-tags">"#,
-                content.link,
-                content.title,
-                content.date.format("%e&nbsp;%B&nbsp;%Y"),
-                content.date.format("%A, %e %B %Y %H:%M:%S UTC"),
-                content.description
-            )
-            .as_str(),
-        );
-
-        for tag in &content.tags {
-            result.push_str(format!("<a>#{}</a>", tag).as_str());
+    let project_directory = Path::new(&context.args.project);
+    while let Some(parent) = template_path.parent() {
+        if template_path == project_directory {
+            break;
         }
 
-        result.push_str("</div></div>");
+        let template = parent.join("_template.html");
+        if template.exists() {
+            template_path = template;
+            dbg!(template_path.display());
+            template_found = true;
+            break;
+        }
+
+        template_path = parent.to_path_buf();
     }
 
-    if result.is_empty() {
-        result.push_str("<p>Unfortunately, page still don't have any posts :(</p>");
+    if !template_found {
+        return Err(anyhow::anyhow!(
+            "Template not found for file '{}'.",
+            path.display()
+        ));
     }
 
-    Ok(result)
+    Ok(template_path)
+}
+
+pub async fn generate_table_of_contents(html: &str, link_references: bool) -> (String, String) {
+    let mut table_of_contents = String::new();
+    let mut index = 0;
+
+    let mut last_level = 2;
+    let mut header = None;
+
+    while let Some(position) = html[index..].find("<h") {
+        let level = html[index + position + 2..index + position + 3]
+            .parse::<usize>()
+            .unwrap();
+
+        index += position + 4;
+        if level == 1 {
+            continue;
+        }
+
+        match html[index..].find("</h") {
+            Some(end) => {
+                generate_element_for_table_of_contents(
+                    &mut table_of_contents,
+                    header,
+                    level,
+                    last_level,
+                );
+
+                last_level = level;
+                header = Some(&html[index..index + end]);
+                index += end;
+            }
+            None => {
+                index += 1;
+                tracing::error!("Unable to find closing bracket for header.");
+            }
+        }
+    }
+
+    generate_element_for_table_of_contents(&mut table_of_contents, header, 2, last_level);
+
+    let is_empty = table_of_contents.is_empty();
+    if is_empty {
+        table_of_contents.push_str("Unfortunatelly, there are no headers in this article :(");
+    } else if link_references {
+        table_of_contents.push_str("<li><a href=\"#references\">References</a></li>");
+    }
+
+    let mut desktop_table_of_contents = table_of_contents.clone();
+    if !is_empty {
+        desktop_table_of_contents.insert_str(0, "<li><a class=\"top\" href=\"#\">(Top)</a></li>");
+    }
+
+    (desktop_table_of_contents, table_of_contents)
+}
+
+fn generate_element_for_table_of_contents(
+    table_of_contents: &mut String,
+    header: Option<&str>,
+    level: usize,
+    last_level: usize,
+) {
+    if header.is_none() {
+        return;
+    }
+    let header = header.unwrap();
+
+    let id = super::get_id_from_name(header);
+
+    table_of_contents.push_str("<li>");
+    if last_level < level {
+        table_of_contents.push_str("<details open><summary>");
+    }
+
+    table_of_contents.push_str(format!("<a href=\"#{id}\">{header}</a>").as_str());
+
+    if last_level < level {
+        table_of_contents.push_str("</summary><ul>");
+    }
+
+    for _ in level..last_level {
+        table_of_contents.push_str("</li></ul></details>");
+    }
+
+    if last_level >= level {
+        table_of_contents.push_str("</li>");
+    }
 }

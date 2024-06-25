@@ -116,8 +116,13 @@ pub async fn run_generator(args: Args) -> () {
     run_generator_impl(&args)
 }
 
+#[cfg(all(debug_assertions, not(target_os = "windows")))]
+type NotifyWatcher = notify::INotifyWatcher;
+#[cfg(all(debug_assertions, target_os = "windows"))]
+type NotifyWatcher = notify::ReadDirectoryChangesWatcher;
+
 #[cfg(debug_assertions)]
-async fn run_generator(args: Args) -> notify::ReadDirectoryChangesWatcher {
+async fn run_generator(args: Args) -> NotifyWatcher {
     use notify::Watcher;
 
     run_generator_impl(&args);

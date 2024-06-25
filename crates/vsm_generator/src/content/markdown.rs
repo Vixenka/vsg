@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::Ok;
 use chrono::{DateTime, Utc};
@@ -10,42 +6,16 @@ use pulldown_cmark::{html, Parser};
 use tokio::fs;
 use url::Url;
 
-use crate::{content, Context};
+use crate::Context;
 
-use super::{content_variables::ContentVariables, word_counter};
-
-pub async fn get_template(context: &Context, path: &Path) -> anyhow::Result<PathBuf> {
-    let mut template_path = path.to_path_buf();
-    let mut template_found = false;
-
-    let project_directory = Path::new(&context.args.project);
-    while let Some(parent) = template_path.parent() {
-        if template_path == project_directory {
-            break;
-        }
-
-        let template = parent.join("_template.html");
-        if template.exists() {
-            template_path = template;
-            template_found = true;
-            break;
-        }
-
-        template_path = parent.to_path_buf();
-    }
-
-    if !template_found {
-        return Err(anyhow::anyhow!(
-            "Template not found for file '{}'.",
-            path.display()
-        ));
-    }
-
-    Ok(template_path)
-}
+use super::{
+    content_variables::ContentVariables,
+    preliminary_analysis::{self, Content, PreliminaryAnalysisOutput},
+    word_counter,
+};
 
 #[derive(Debug, Default)]
-pub struct MarkdownContent {
+pub struct BlogContent {
     pub link: String,
     pub title: String,
     pub description: String,
@@ -56,76 +26,77 @@ pub struct MarkdownContent {
     pub difficulty: f64,
 }
 
-impl MarkdownContent {
-    fn get_element<'a>(
-        key: &str,
-        md_variables: &'a HashMap<String, VariableValue>,
-    ) -> anyhow::Result<&'a VariableValue> {
-        match md_variables.get(key) {
-            Some(value) => Ok(value),
-            None => anyhow::bail!("Unable to find variable with key '{}'", key),
-        }
-    }
+#[derive(Debug, Default)]
+pub struct ExpContent {}
 
-    fn get_element_string(
-        key: &str,
-        md_variables: &HashMap<String, VariableValue>,
-    ) -> anyhow::Result<String> {
-        match Self::get_element(key, md_variables)? {
-            VariableValue::String(str) => Ok(str.clone()),
-            _ => anyhow::bail!("Variable '{}' is not a string.", key),
-        }
+fn get_element<'a>(
+    key: &str,
+    md_variables: &'a HashMap<String, VariableValue>,
+) -> anyhow::Result<&'a VariableValue> {
+    match md_variables.get(key) {
+        Some(value) => Ok(value),
+        None => anyhow::bail!("Unable to find variable with key '{}'", key),
     }
+}
 
-    fn get_element_string_vec(
-        key: &str,
-        md_variables: &HashMap<String, VariableValue>,
-    ) -> anyhow::Result<Vec<String>> {
-        match Self::get_element(key, md_variables)? {
-            VariableValue::Array(array) => {
-                let mut result = Vec::new();
-                for value in array {
-                    if let VariableValue::String(str) = value {
-                        result.push(str.clone());
-                    } else {
-                        anyhow::bail!("Variable '{}' is not an array of strings.", key);
-                    }
+fn get_element_string(
+    key: &str,
+    md_variables: &HashMap<String, VariableValue>,
+) -> anyhow::Result<String> {
+    match get_element(key, md_variables)? {
+        VariableValue::String(str) => Ok(str.clone()),
+        _ => anyhow::bail!("Variable '{}' is not a string.", key),
+    }
+}
+
+fn get_element_string_vec(
+    key: &str,
+    md_variables: &HashMap<String, VariableValue>,
+) -> anyhow::Result<Vec<String>> {
+    match get_element(key, md_variables)? {
+        VariableValue::Array(array) => {
+            let mut result = Vec::new();
+            for value in array {
+                if let VariableValue::String(str) = value {
+                    result.push(str.clone());
+                } else {
+                    anyhow::bail!("Variable '{}' is not an array of strings.", key);
                 }
-
-                Ok(result)
             }
-            _ => anyhow::bail!("Variable '{}' is not an array.", key),
-        }
-    }
 
-    fn get_element_date(
-        key: &str,
-        md_variables: &HashMap<String, VariableValue>,
-    ) -> anyhow::Result<DateTime<Utc>> {
-        match Self::get_element(key, md_variables)? {
-            VariableValue::Date(date) => Ok(*date),
-            _ => anyhow::bail!("Variable '{}' is not a date.", key),
+            Ok(result)
         }
+        _ => anyhow::bail!("Variable '{}' is not an array.", key),
     }
+}
 
-    fn get_element_bool(
-        key: &str,
-        md_variables: &HashMap<String, VariableValue>,
-    ) -> anyhow::Result<bool> {
-        match Self::get_element(key, md_variables)? {
-            VariableValue::Bool(bool) => Ok(*bool),
-            _ => anyhow::bail!("Variable '{}' is not a boolean.", key),
-        }
+fn get_element_date(
+    key: &str,
+    md_variables: &HashMap<String, VariableValue>,
+) -> anyhow::Result<DateTime<Utc>> {
+    match get_element(key, md_variables)? {
+        VariableValue::Date(date) => Ok(*date),
+        _ => anyhow::bail!("Variable '{}' is not a date.", key),
     }
+}
 
-    fn get_element_number(
-        key: &str,
-        md_variables: &HashMap<String, VariableValue>,
-    ) -> anyhow::Result<f64> {
-        match Self::get_element(key, md_variables)? {
-            VariableValue::Number(number) => Ok(*number),
-            _ => anyhow::bail!("Variable '{}' is not a number.", key),
-        }
+fn get_element_bool(
+    key: &str,
+    md_variables: &HashMap<String, VariableValue>,
+) -> anyhow::Result<bool> {
+    match get_element(key, md_variables)? {
+        VariableValue::Bool(bool) => Ok(*bool),
+        _ => anyhow::bail!("Variable '{}' is not a boolean.", key),
+    }
+}
+
+fn get_element_number(
+    key: &str,
+    md_variables: &HashMap<String, VariableValue>,
+) -> anyhow::Result<f64> {
+    match get_element(key, md_variables)? {
+        VariableValue::Number(number) => Ok(*number),
+        _ => anyhow::bail!("Variable '{}' is not a number.", key),
     }
 }
 
@@ -133,7 +104,7 @@ pub async fn set_variables(
     context: &Arc<Context>,
     path: &Path,
     variables: &mut ContentVariables,
-) -> anyhow::Result<MarkdownContent> {
+) -> anyhow::Result<Content> {
     let mut file_content = fs::read_to_string(path).await?;
     let md_variables = extract_variables(&mut file_content)?;
     let process_variables = process_variables(context, path, variables, md_variables);
@@ -144,7 +115,7 @@ pub async fn set_variables(
     html::push_html(&mut html, parser);
 
     let cite_notes = generate_cite_notes(&mut html).await;
-    let table_of_contents = generate_table_of_contents(&html).await;
+    let table_of_contents = preliminary_analysis::generate_table_of_contents(&html, true).await;
 
     let mut content = process_variables.await?;
     word_counter::compute_read_time(&file_content, &mut content, variables);
@@ -160,18 +131,19 @@ pub async fn set_variables(
         table_of_contents.1,
     );
 
-    let mut tags = String::new();
-    for tag in &content.tags {
-        tags.push_str(format!("<a>#<strong>{}</strong></a>", tag).as_str());
+    if let Content::Blog(content) = &content {
+        let mut tags = String::new();
+        for tag in &content.tags {
+            tags.push_str(format!("<a>#<strong>{}</strong></a>", tag).as_str());
+        }
+        variables.insert("md_tags".to_owned(), tags);
+        variables.insert("warning".to_owned(), get_draft_info(content));
     }
-    variables.insert("md_tags".to_owned(), tags);
-
-    variables.insert("warning".to_owned(), get_draft_info(&content));
 
     Ok(content)
 }
 
-fn get_draft_info(content: &MarkdownContent) -> String {
+fn get_draft_info(content: &BlogContent) -> String {
     match content.draft {
         true => {
             "<p class=\"warning\">This article is still a draft, changes may occur and should not be taken seriously</p>"
@@ -213,10 +185,10 @@ async fn process_variables(
     path: &Path,
     variables: &mut ContentVariables,
     md_variables: HashMap<String, VariableValue>,
-) -> anyhow::Result<MarkdownContent> {
-    for key in ["title", "description", "date"] {
+) -> anyhow::Result<Content> {
+    for key in ["title", "description", "date", "background_url"] {
         let Some(value) = md_variables.get(key) else {
-            anyhow::bail!("Unable to find markdown variable with key '{}'", key);
+            continue;
         };
         let key = format!("md_{}", key);
 
@@ -238,102 +210,25 @@ async fn process_variables(
         };
     }
 
-    Ok(MarkdownContent {
-        link: context.get_file_link(path),
-        title: MarkdownContent::get_element_string("title", &md_variables)?,
-        description: MarkdownContent::get_element_string("description", &md_variables)?,
-        tags: MarkdownContent::get_element_string_vec("tags", &md_variables)?,
-        date: MarkdownContent::get_element_date("date", &md_variables)?,
-        draft: MarkdownContent::get_element_bool("draft", &md_variables)?,
-        technical: MarkdownContent::get_element_bool("technical", &md_variables)?,
-        difficulty: MarkdownContent::get_element_number("difficulty", &md_variables)?,
-    })
-}
-
-async fn generate_table_of_contents(html: &str) -> (String, String) {
-    let mut table_of_contents = String::new();
-    let mut index = 0;
-
-    let mut last_level = 2;
-    let mut header = None;
-
-    while let Some(position) = html[index..].find("<h") {
-        let level = html[index + position + 2..index + position + 3]
-            .parse::<usize>()
-            .unwrap();
-
-        index += position + 4;
-        if level == 1 {
-            continue;
-        }
-
-        match html[index..].find("</h") {
-            Some(end) => {
-                generate_element_for_table_of_contents(
-                    &mut table_of_contents,
-                    header,
-                    level,
-                    last_level,
-                );
-
-                last_level = level;
-                header = Some(&html[index..index + end]);
-                index += end;
-            }
-            None => {
-                index += 1;
-                tracing::error!("Unable to find closing bracket for header.");
-            }
-        }
-    }
-
-    generate_element_for_table_of_contents(&mut table_of_contents, header, 2, last_level);
-
-    let is_empty = table_of_contents.is_empty();
-    if is_empty {
-        table_of_contents.push_str("Unfortunatelly, there are no headers in this article :(");
+    let p = path.to_str().unwrap();
+    if p.contains("blog/") {
+        Ok(Content::Blog(BlogContent {
+            link: context.get_file_link(path),
+            title: get_element_string("title", &md_variables)?,
+            description: get_element_string("description", &md_variables)?,
+            tags: get_element_string_vec("tags", &md_variables)?,
+            date: get_element_date("date", &md_variables)?,
+            draft: get_element_bool("draft", &md_variables)?,
+            technical: get_element_bool("technical", &md_variables)?,
+            difficulty: get_element_number("difficulty", &md_variables)?,
+        }))
+    } else if p.contains("exp/") {
+        Ok(Content::Exp(ExpContent {}))
     } else {
-        table_of_contents.push_str("<li><a href=\"#references\">References</a></li>");
-    }
-
-    let mut desktop_table_of_contents = table_of_contents.clone();
-    if !is_empty {
-        desktop_table_of_contents.insert_str(0, "<li><a class=\"top\" href=\"#\">(Top)</a></li>");
-    }
-
-    (desktop_table_of_contents, table_of_contents)
-}
-
-fn generate_element_for_table_of_contents(
-    table_of_contents: &mut String,
-    header: Option<&str>,
-    level: usize,
-    last_level: usize,
-) {
-    if header.is_none() {
-        return;
-    }
-    let header = header.unwrap();
-
-    let id = content::get_id_from_name(header);
-
-    table_of_contents.push_str("<li>");
-    if last_level < level {
-        table_of_contents.push_str("<details open><summary>");
-    }
-
-    table_of_contents.push_str(format!("<a href=\"#{id}\">{header}</a>").as_str());
-
-    if last_level < level {
-        table_of_contents.push_str("</summary><ul>");
-    }
-
-    for _ in level..last_level {
-        table_of_contents.push_str("</li></ul></details>");
-    }
-
-    if last_level >= level {
-        table_of_contents.push_str("</li>");
+        anyhow::bail!(
+            "Unable to determine content type for path '{}'",
+            path.display()
+        );
     }
 }
 
@@ -481,4 +376,55 @@ impl VariableValue {
             Ok(VariableValue::Date(date))
         }
     }
+}
+
+pub async fn create_md_post_list(
+    outputs: &[Arc<PreliminaryAnalysisOutput>],
+) -> anyhow::Result<String> {
+    let mut result = String::new();
+
+    let mut vec = outputs
+        .iter()
+        .filter_map(|v| match &v.content {
+            Some(Content::Blog(c)) => Some(c),
+            _ => None,
+        })
+        .filter(|v| !v.draft)
+        .collect::<Vec<_>>();
+    vec.sort_by(|a, b| b.date.cmp(&a.date));
+
+    for content in vec {
+        result.push_str(
+            format!(
+                r#"<div class="post-list">
+                    <div class="post-list-top">
+                        <a href="{}">{}</a>
+                        <div class="tooltip-wrapper">
+                            {}
+                            <div class="tooltip">{}</div>
+                        </div>
+                    </div>
+                    <p>{}</p>
+                    <div class="post-list-tags">"#,
+                content.link,
+                content.title,
+                content.date.format("%e&nbsp;%B&nbsp;%Y"),
+                content.date.format("%A, %e %B %Y %H:%M:%S UTC"),
+                content.description
+            )
+            .as_str(),
+        );
+
+        for tag in &content.tags {
+            result.push_str(format!("<a>#{}</a>", tag).as_str());
+        }
+
+        result.push_str("</div></div>");
+    }
+
+    if result.is_empty() {
+        result.push_str("<p>Unfortunately, page still don't have any posts :(</p>");
+    }
+
+    Ok(result)
 }
